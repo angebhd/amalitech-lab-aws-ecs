@@ -1,0 +1,12 @@
+version: 0.0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        # CodeDeploy substitutes <TASK_DEFINITION> with the revision it registers
+        # from taskdef.json (which already pins the immutable, SHA-tagged image).
+        TaskDefinition: <TASK_DEFINITION>
+        LoadBalancerInfo:
+          ContainerName: "ecs-cicd-app"
+          ContainerPort: 8080
+        PlatformVersion: LATEST

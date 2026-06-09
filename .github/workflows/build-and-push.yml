@@ -1,0 +1,84 @@
+name: Build and push image to ECR
+
+# Pushing application code builds a container image, tags it immutably with the
+# commit SHA, and pushes it to ECR. The push is what EventBridge uses to trigger
+# CodePipeline -> CodeDeploy (blue/green). The deploy bundle (taskdef + appspec)
+# is rendered here with the exact image URI so the pipeline deploys precisely
+# this immutable image -- no mutable "latest" tag is ever moved.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "build.gradle"
+      - "settings.gradle"
+      - "Dockerfile"
+      - "deploy/**"
+      - ".github/workflows/build-and-push.yml"
+  workflow_dispatch: {}
+
+# OIDC: request a short-lived token to assume the AWS role. No static keys.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ARTIFACT_BUCKET: ecs-cicd-artifacts # <account>-<region> suffix appended below
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image (immutable SHA tag)
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build -t "$IMAGE_URI" .
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Render deploy bundle (taskdef + appspec)
+        id: render
+        env:
+          IMAGE_URI: ${{ steps.build.outputs.image_uri }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          sed -e "s|__IMAGE_URI__|${IMAGE_URI}|g" \
+              -e "s|__ACCOUNT_ID__|${ACCOUNT_ID}|g" \
+              -e "s|__AWS_REGION__|${AWS_REGION}|g" \
+              deploy/taskdef.json > taskdef.json
+          cp deploy/appspec.yaml appspec.yaml
+          zip -j config-source.zip taskdef.json appspec.yaml
+          echo "bucket=${ARTIFACT_BUCKET}-${ACCOUNT_ID}-${AWS_REGION}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload deploy bundle to the artifact bucket
+        env:
+          BUCKET: ${{ steps.render.outputs.bucket }}
+        run: |
+          # Upload the bundle BEFORE pushing the image, so the pipeline (started
+          # by the ECR push event) reads config that already points at this SHA.
+          aws s3 cp config-source.zip "s3://${BUCKET}/config-source.zip"
+
+      - name: Push image to ECR (triggers the pipeline)
+        env:
+          IMAGE_URI: ${{ steps.build.outputs.image_uri }}
+        run: |
+          docker push "$IMAGE_URI"
+          echo "Pushed immutable image: $IMAGE_URI"
