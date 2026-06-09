@@ -4,8 +4,8 @@
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
   "memory": "512",
-  "executionRoleArn": "arn:aws:iam::__ACCOUNT_ID__:role/ecs-cicd-task-exec-role",
-  "taskRoleArn": "arn:aws:iam::__ACCOUNT_ID__:role/ecs-cicd-task-role",
+  "executionRoleArn": "__EXEC_ROLE_ARN__",
+  "taskRoleArn": "__TASK_ROLE_ARN__",
   "containerDefinitions": [
     {
       "name": "ecs-cicd-app",

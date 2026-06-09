@@ -42,7 +42,20 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push image (immutable SHA tag)
+      - name: Look up the real task role ARNs from the running service
+        id: roles
+        run: |
+          # The roles are auto-named by CloudFormation; read their real ARNs from
+          # the service's current task definition so taskdef.json points at roles
+          # that actually exist.
+          TD=$(aws ecs describe-services --cluster ecs-cicd-cluster --services ecs-cicd-service \
+                 --query 'services[0].taskDefinition' --output text)
+          echo "exec=$(aws ecs describe-task-definition --task-definition "$TD" \
+                 --query 'taskDefinition.executionRoleArn' --output text)" >> "$GITHUB_OUTPUT"
+          echo "task=$(aws ecs describe-task-definition --task-definition "$TD" \
+                 --query 'taskDefinition.taskRoleArn' --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
         id: build
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
@@ -58,10 +71,13 @@ jobs:
         env:
           IMAGE_URI: ${{ steps.build.outputs.image_uri }}
           AWS_REGION: ${{ vars.AWS_REGION }}
+          EXEC_ROLE_ARN: ${{ steps.roles.outputs.exec }}
+          TASK_ROLE_ARN: ${{ steps.roles.outputs.task }}
         run: |
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           sed -e "s|__IMAGE_URI__|${IMAGE_URI}|g" \
-              -e "s|__ACCOUNT_ID__|${ACCOUNT_ID}|g" \
+              -e "s|__EXEC_ROLE_ARN__|${EXEC_ROLE_ARN}|g" \
+              -e "s|__TASK_ROLE_ARN__|${TASK_ROLE_ARN}|g" \
               -e "s|__AWS_REGION__|${AWS_REGION}|g" \
               deploy/taskdef.json > taskdef.json
           cp deploy/appspec.yaml appspec.yaml
@@ -76,9 +92,26 @@ jobs:
           # by the ECR push event) reads config that already points at this SHA.
           aws s3 cp config-source.zip "s3://${BUCKET}/config-source.zip"
 
-      - name: Push image to ECR (triggers the pipeline)
+      - name: Push image to ECR (skip if the immutable tag already exists)
+        id: push
         env:
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
           IMAGE_URI: ${{ steps.build.outputs.image_uri }}
         run: |
-          docker push "$IMAGE_URI"
-          echo "Pushed immutable image: $IMAGE_URI"
+          if aws ecr describe-images --repository-name "$REPOSITORY" \
+               --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "Image $IMAGE_TAG already exists (re-run) — skipping push."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          else
+            docker push "$IMAGE_URI"
+            echo "Pushed immutable image: $IMAGE_URI"
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger the pipeline directly on a re-run
+        if: steps.push.outputs.pushed == 'false'
+        run: |
+          # On a re-run no ECR push event fires, so start the pipeline explicitly.
+          # It reads the freshly-uploaded config-source.zip (now with correct roles).
+          aws codepipeline start-pipeline-execution --name ecs-cicd-pipeline
