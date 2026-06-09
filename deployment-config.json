@@ -16,7 +16,8 @@
     "CpuTargetPercent": "50",
     "HealthCheckPath": "/",
     "GitHubOrg": "angebhd",
-    "GitHubRepo": "amalitech-lab-aws-ecs"
+    "GitHubRepo": "amalitech-lab-aws-ecs",
+    "CreateOidcProvider": "false"
   },
   "tags": {
     "project": "ecs-cicd",

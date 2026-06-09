@@ -105,6 +105,22 @@ Parameters:
     Default: amalitech-lab-aws-ecs
     Description: GitHub repository allowed to assume the OIDC push role.
 
+  CreateOidcProvider:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Whether to create the GitHub Actions OIDC provider. An account can hold
+      only one provider per URL, so set this to "true" only if the account does
+      not already have a token.actions.githubusercontent.com provider. When
+      "false" the existing provider is reused (its ARN is deterministic).
+
+# ---------------------------------------------------------------------------
+# Conditions
+# ---------------------------------------------------------------------------
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
 Resources:
   # -------------------------------------------------------------------------
   # VPC + Internet Gateway
@@ -632,6 +648,7 @@ Resources:
   # -------------------------------------------------------------------------
   GitHubOidcProvider:
     Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
     Properties:
       Url: https://token.actions.githubusercontent.com
       ClientIdList:
@@ -648,7 +665,12 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Federated: !Ref GitHubOidcProvider
+              # Same ARN whether this stack creates the provider or reuses an
+              # existing one - it is deterministic per account.
+              Federated: !If
+                - ShouldCreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
