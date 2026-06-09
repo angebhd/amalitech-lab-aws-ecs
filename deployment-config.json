@@ -8,7 +8,6 @@
     "PrivateSubnet1Cidr": "10.0.10.0/24",
     "PrivateSubnet2Cidr": "10.0.11.0/24",
     "ContainerPort": "8080",
-    "ImageTag": "latest",
     "TaskCpu": "256",
     "TaskMemory": "512",
     "DesiredCount": "1",
@@ -16,7 +15,7 @@
     "MaxTasks": "4",
     "CpuTargetPercent": "50",
     "HealthCheckPath": "/",
-    "GitHubOrg": "amalitech",
+    "GitHubOrg": "angebhd",
     "GitHubRepo": "amalitech-lab-aws-ecs"
   },
   "tags": {

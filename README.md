@@ -18,8 +18,9 @@ Internet ──▶ ALB (public subnets, 2 AZ)
                 ▼
               Amazon ECR (immutable tags, scan on push)
 
-GitHub Actions ──(OIDC)──▶ push image to ECR
-ECR push ──▶ EventBridge ──▶ CodePipeline ──▶ CodeDeploy (blue/green) ──▶ ECS
+GitHub Actions ──(OIDC)──▶ build + push immutable SHA image to ECR
+                       └──▶ upload config-source.zip (taskdef+appspec, image baked in)
+ECR push ──▶ EventBridge ──▶ CodePipeline (S3 source) ──▶ CodeDeploy (blue/green) ──▶ ECS
 ```
 
 - **Single regional NAT Gateway** for private-subnet egress (cost optimization).
@@ -37,8 +38,18 @@ ECR push ──▶ EventBridge ──▶ CodePipeline ──▶ CodeDeploy (blue
 |------|---------|
 | `template.yaml` | The full CloudFormation stack. |
 | `deployment-config.json` | GitSync deployment file (template path + parameters + tags). |
-| `taskdef.json` | ECS task definition template consumed by CodeDeploy. |
-| `appspec.yaml` | CodeDeploy ECS appspec (container/port to shift traffic to). |
+
+> The CodeDeploy deploy descriptors (`taskdef.json`, `appspec.yaml`) live with
+> the application on `main` under `deploy/`. The GitHub Actions workflow renders
+> them with the exact image URI and uploads `config-source.zip` to the artifact
+> bucket — the pipeline's S3 source action consumes it.
+
+## Image tagging — strictly immutable
+
+The ECR repo is `IMMUTABLE`. Every build is tagged with the **commit SHA** only;
+no mutable `latest` tag is ever re-pointed. Because the deploy bundle bakes in
+that exact SHA image URI, the pipeline deploys precisely the pushed image —
+there is no ECR source action tracking a moving tag.
 
 ## Deploy (GitSync)
 
@@ -46,27 +57,17 @@ ECR push ──▶ EventBridge ──▶ CodePipeline ──▶ CodeDeploy (blue
    this repo/branch, and select `deployment-config.json` as the deployment file.
 2. CloudFormation provisions the stack and re-syncs on every push to this branch.
 
-## Bootstrap order (one time)
+## Bootstrap
 
-ECR starts empty, so seed an image before the service can become healthy:
+The stack creates cleanly on its own: the service starts on a small public
+placeholder image (`BootstrapImage`) that serves HTTP 200 on the container port,
+so it passes ALB health checks before any application image exists.
 
-1. After the stack creates ECR, push an image tagged `latest` (the GitHub
-   Actions workflow on `main` does this via OIDC).
-2. Fill the literal placeholders in `taskdef.json` before zipping the config
-   source — `<ACCOUNT_ID>` and `<AWS_REGION>` (CodeDeploy only substitutes
-   `<IMAGE1_NAME>`).
-3. Zip `taskdef.json` + `appspec.yaml` into `config-source.zip` and upload it to
-   the artifact bucket (`ArtifactBucketName` output):
-
-   ```bash
-   zip config-source.zip taskdef.json appspec.yaml
-   aws s3 cp config-source.zip "s3://$(aws cloudformation describe-stacks \
-     --stack-name <stack> --query 'Stacks[0].Outputs[?OutputKey==`ArtifactBucketName`].OutputValue' \
-     --output text)/config-source.zip"
-   ```
-
-Subsequent pushes (immutable git-SHA tags) trigger EventBridge → CodePipeline →
-CodeDeploy blue/green automatically.
+Then push to `main` once — the GitHub Actions workflow (OIDC) builds the
+SHA-tagged image, renders `taskdef.json`/`appspec.yaml`, uploads
+`config-source.zip` to the artifact bucket, and pushes the image. That ECR push
+fires EventBridge → CodePipeline → CodeDeploy, which replaces the placeholder
+with the real image (blue/green). Every subsequent push repeats the flow.
 
 ## Outputs
 

@@ -47,13 +47,14 @@ Parameters:
     Default: 8080
     Description: Port the Spring Boot container listens on.
 
-  ImageTag:
+  BootstrapImage:
     Type: String
-    Default: latest
+    Default: public.ecr.aws/docker/library/python:3.12-alpine
     Description: >
-      Tag of the seed image used when the service is first created. Push an
-      image with this tag to ECR once to bootstrap; subsequent immutable
-      git-SHA tags are rolled out by CodeDeploy.
+      Placeholder image used ONLY for the initial service creation so the stack
+      can reach a healthy steady state before any application image exists.
+      CodeDeploy replaces it with the real immutable ECR image on the first
+      deployment. Pulled over the NAT gateway (it is a public image).
 
   TaskCpu:
     Type: String
@@ -96,7 +97,7 @@ Parameters:
 
   GitHubOrg:
     Type: String
-    Default: amalitech
+    Default: angebhd
     Description: GitHub organisation/user that owns the application repo (OIDC trust).
 
   GitHubRepo:
@@ -460,8 +461,17 @@ Resources:
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
       TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
+        # Seed definition only. CodeDeploy registers a new revision from the
+        # app's taskdef.json (real ECR image) on the first deployment. The
+        # placeholder just serves HTTP 200 on the container port so the initial
+        # service passes ALB health checks.
         - Name: !Sub "${ProjectName}-app"
-          Image: !Sub "${EcrRepository.RepositoryUri}:${ImageTag}"
+          Image: !Ref BootstrapImage
+          Command:
+            - python3
+            - -m
+            - http.server
+            - !Sub "${ContainerPort}"
           Essential: true
           PortMappings:
             - ContainerPort: !Ref ContainerPort
@@ -600,7 +610,8 @@ Resources:
       ScalableDimension: ecs:service:DesiredCount
       MinCapacity: !Ref MinTasks
       MaxCapacity: !Ref MaxTasks
-      RoleARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService"
+      # RoleARN intentionally omitted: Application Auto Scaling uses (and
+      # auto-creates) the ECS service-linked role for scalable targets.
 
   CpuScalingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
@@ -662,6 +673,17 @@ Resources:
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
                 Resource: !GetAtt EcrRepository.Arn
+        - PolicyName: deploy-bundle-upload
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Upload the rendered config-source.zip (taskdef + appspec) that the
+              # pipeline's S3 source action consumes.
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "${ArtifactBucket.Arn}/config-source.zip"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-github-oidc-role"
@@ -770,12 +792,6 @@ Resources:
                   - !Sub "${ArtifactBucket.Arn}/*"
               - Effect: Allow
                 Action:
-                  - ecr:DescribeImages
-                  - ecr:BatchGetImage
-                  - ecr:GetDownloadUrlForLayer
-                Resource: !GetAtt EcrRepository.Arn
-              - Effect: Allow
-                Action:
                   - codedeploy:CreateDeployment
                   - codedeploy:GetDeployment
                   - codedeploy:GetDeploymentConfig
@@ -807,20 +823,12 @@ Resources:
         Type: S3
         Location: !Ref ArtifactBucket
       Stages:
+        # The deploy bundle (taskdef.json + appspec.yaml) is rendered by the
+        # GitHub Actions workflow with the exact immutable, SHA-tagged image URI
+        # already baked in, then uploaded here as config-source.zip. No ECR
+        # source action is needed - the pipeline deploys precisely that image.
         - Name: Source
           Actions:
-            - Name: ImageSource
-              ActionTypeId:
-                Category: Source
-                Owner: AWS
-                Provider: ECR
-                Version: "1"
-              Configuration:
-                RepositoryName: !Ref EcrRepository
-                ImageTag: !Ref ImageTag
-              OutputArtifacts:
-                - Name: ImageArtifact
-              RunOrder: 1
             - Name: ConfigSource
               ActionTypeId:
                 Category: Source
@@ -849,11 +857,8 @@ Resources:
                 TaskDefinitionTemplatePath: taskdef.json
                 AppSpecTemplateArtifact: ConfigArtifact
                 AppSpecTemplatePath: appspec.yaml
-                Image1ArtifactName: ImageArtifact
-                Image1ContainerName: IMAGE1_NAME
               InputArtifacts:
                 - Name: ConfigArtifact
-                - Name: ImageArtifact
               RunOrder: 1
 
   # -------------------------------------------------------------------------
