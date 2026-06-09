@@ -696,6 +696,7 @@ Resources:
                   - ecr:UploadLayerPart
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
                 Resource: !GetAtt EcrRepository.Arn
         - PolicyName: deploy-bundle-upload
           PolicyDocument:
