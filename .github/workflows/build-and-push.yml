@@ -60,7 +60,7 @@ jobs:
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ange_buhendwa_${{ github.sha }}
         run: |
           IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
           docker build -t "$IMAGE_URI" .
@@ -96,17 +96,26 @@ jobs:
         id: push
         env:
           REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ange_buhendwa_${{ github.sha }}
           IMAGE_URI: ${{ steps.build.outputs.image_uri }}
         run: |
-          if aws ecr describe-images --repository-name "$REPOSITORY" \
-               --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+          set +e
+          OUT=$(aws ecr describe-images --repository-name "$REPOSITORY" \
+                  --image-ids imageTag="$IMAGE_TAG" 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -eq 0 ]; then
             echo "Image $IMAGE_TAG already exists (re-run) — skipping push."
             echo "pushed=false" >> "$GITHUB_OUTPUT"
-          else
+          elif echo "$OUT" | grep -q 'ImageNotFoundException'; then
             docker push "$IMAGE_URI"
             echo "Pushed immutable image: $IMAGE_URI"
             echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            # Any other error (e.g. AccessDenied) is real — fail loudly instead
+            # of mistaking it for "image not found" and pushing.
+            echo "$OUT" >&2
+            exit 1
           fi
 
       - name: Trigger the pipeline directly on a re-run
