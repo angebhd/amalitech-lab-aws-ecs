@@ -384,6 +384,8 @@ Resources:
     Properties:
       RepositoryName: !Sub "${ProjectName}-app"
       ImageTagMutability: IMMUTABLE
+      # Allow the stack to delete the repo even when it still holds images.
+      EmptyOnDelete: true
       ImageScanningConfiguration:
         ScanOnPush: true
       LifecyclePolicy:
