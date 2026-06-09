@@ -426,9 +426,6 @@ Resources:
   TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      # Explicit name so the deploy taskdef.json (on main) can reference it by a
-      # stable ARN. Without this, CloudFormation auto-generates a random name.
-      RoleName: !Sub "${ProjectName}-task-exec-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -445,7 +442,6 @@ Resources:
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ProjectName}-task-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -712,6 +708,18 @@ Resources:
                   - s3:PutObject
                   - s3:GetObject
                 Resource: !Sub "${ArtifactBucket.Arn}/config-source.zip"
+        - PolicyName: read-task-roles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Let the workflow discover the real (auto-generated) task role ARNs
+              # from the running service, to render them into taskdef.json.
+              - Effect: Allow
+                Action: ecs:DescribeServices
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}-cluster/${ProjectName}-service"
+              - Effect: Allow
+                Action: ecs:DescribeTaskDefinition
+                Resource: "*"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-github-oidc-role"
