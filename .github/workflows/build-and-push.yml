@@ -65,7 +65,7 @@ jobs:
           IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
           docker build -t "$IMAGE_URI" .
           echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
-
+# NO need to inject arn, and to push everytime to S3 | Use parameter 
       - name: Render deploy bundle (taskdef + appspec)
         id: render
         env:
